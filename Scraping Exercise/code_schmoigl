@@ -1,0 +1,442 @@
+---
+title: "Webscraping"
+execute:
+  echo: true
+  eval: false
+  output: false
+---
+
+```{r}
+library(rvest)
+library(readr)
+library(RSelenium)
+library(netstat)
+library(tidyverse)
+library(lubridate)
+library(zoo)
+library(data.table)
+```
+
+The "data base":
+
+https://edikte.justiz.gv.at/edikte/id/idedi8.nsf/suche!OpenForm&subf=v
+
+Here is a simple examples of how to extract some data from the site based on the class and type of tag:
+
+```{r}
+URL_example <- "https://edikte.justiz.gv.at/edikte/id/idedi8.nsf/suchedi?SearchView&subf=vid&SearchOrder=4&SearchMax=4999&retfields=~SDatArt1=DATAF~SDatWert3=01.12.2022~SDatWert4=16.12.2022~SDatWert1=~SDatWert2=&ftquery=&query=_%26__01.12.2022_DATAF_16.12.2022_"
+
+page_example <- read_html(URL_example)
+
+example_texts <- page_example |>
+  html_elements(".rowlink") |> # here we select by class rowlink
+  html_elements("a") |> # here we select by tag a
+  html_text() |> # here we extract the tet inside the tag
+  as.data.frame() |>
+  rename("example_texts" = 1)
+```
+
+Instead of using the class .rowlink to define which elements we want to extract, we could also try to get the list by using the id (#idName) which would be #ergebnisliste 
+
+```{r}
+example_by_id <- page_example |>
+  html_elements("#ergebnisliste") |> 
+  html_elements("a") |>
+  html_text() |> 
+  as.data.frame()
+```
+
+Also we could try to extract the whole table by referencing the tag table and extract it at once with html_table()
+
+```{r}
+example_table <- page_example |>
+  html_element("table") |> # notice that "element" is singular 
+  html_table()
+```
+
+Similarly we can get the link by extracting the href attribute from the elements:
+
+```{r}
+example_links <- page_example |> 
+  html_elements(".rowlink") |> 
+  html_elements("a") |>
+  html_attr("href") %>% # instead of the text, here we extract the attribute "href"
+  # .[str_detect(., 'OpenDocument')] |>
+  as.data.frame() |>
+  drop_na()
+```
+
+Putting them together and filtering out the uninteresting links we get a table with the desired information:
+
+```{r}
+example_data <- cbind(example_texts, example_links)
+names(example_data) <- c("example_texts", "example_links")
+
+example_data <- example_data |>
+  filter(substr(example_texts, 1, 2) %in% c("LG", "BG", "HG")) |>
+  mutate(example_links = paste0(
+    "https://edikte.justiz.gv.at/edikte/id/idedi8.nsf/", 
+    example_links
+    ))
+```
+
+But how to go about and extract all links? First by constructing a list of dates:
+
+```{r}
+date.end.month <- seq(
+  as.Date("2007-02-01"), 
+  length = 12, 
+  by = "months"
+  ) - 1
+date.begin.month <- seq(
+  as.Date("2007-01-01"),
+  length = 12, 
+  by = "months"
+  )
+date.end.month <- format(date.end.month, "%d.%m.%Y")
+date.proper <- format(date.begin.month, "%Y-%m-%d")  
+date.begin.month <- format(date.begin.month, "%d.%m.%Y")
+
+dates <- as.data.frame(cbind(
+  date.begin.month, 
+  date.end.month, 
+  date.proper
+  ))
+```
+
+Afterwards we can insert the dates into the url which specifies the search query by dates. What happens in the loop then is essentially the same as before:
+
+```{r}
+URL_base <- "https://edikte.justiz.gv.at/edikte/id/idedi8.nsf/suchedi?"
+
+data_cases <- data.frame(
+  case_nr = character(),
+  case_link = character(),
+  case_address = character(),
+  month = character()
+  )
+
+for(i in 1:nrow(dates)) {
+
+  temp <- NULL  
+  
+  URL_ext <- paste0(
+    "SearchView&subf=vid&SearchOrder=4&SearchMax=4999&retfields=~SDatArt1=~SDatWert3=~SDatWert4=~SDatWert1=", 
+    dates[i,1],
+    "~SDatWert2=", 
+    dates[i,2],
+    "~BMAZ=2&ftquery=&query=_%26__", 
+    dates[i,1],
+    "_DATBM_", 
+    dates[i,2],
+    "_"
+    )
+  
+  URL <- paste0(URL_base, URL_ext)
+  pg <- read_html(URL)
+
+  case_nr <- pg |>
+    html_elements(".rowlink") |> 
+    html_elements("a") |>
+    html_text() |>
+    as.data.frame() |>
+    rename("case_nr" = 1)
+
+  case_link <- pg |> 
+    html_elements(".rowlink") |> 
+    html_elements("a") |>
+    html_attr("href") |>
+    as.data.frame() |>
+    rename("case_link" = 1)
+  
+  case_address <- pg |>
+    html_element("table") |> 
+    html_table() |>
+    rename(case_debtor = 3) |>
+    mutate(case_address = str_extract(case_debtor, "\\d{4}")) |>
+    select(case_address) 
+    
+  temp <- cbind(case_nr, case_link, case_address) |>
+    mutate(case_link = paste0("https://edikte.justiz.gv.at/edikte/id/idedi8.nsf/", case_link)) |>
+    mutate(month = dates[i,3])
+  
+  data_cases <- data_cases |> add_row(temp)
+  
+  if (i %% 1 == 0) {
+    print(paste0("Total: ", nrow(dates), ", Current: ", i))
+  }
+
+}
+```
+
+```{r}
+data_cases <- data_cases |>
+  arrange(month) |>
+  filter(!duplicated(case_nr))
+
+write_csv(data_cases,"data/cases.csv")
+```
+
+Now we want to extract the really important information from the sub pages of the cases:
+
+```{r}
+example_info <- read_html(example_data$example_links[2]) %>%
+  html_elements("dl , div.zeilehead") %>%
+  html_text() %>%
+  as.data.frame() %>%
+  mutate(Sub = sapply(str_split(., ":"), "[[", 1)) %>%
+  mutate(Info = gsub("^.*?:","",.)) %>%
+  select(-.)
+
+example_type <- read_html(example_data$example_links[1]) |>
+  html_elements("#Verfahren") |>
+  html_text()
+```
+
+Again looping through all the cases
+
+```{r}
+## get all the infos
+
+data_info <- data.frame(
+  info = character(),
+  text = character(),
+  type = character(),
+  case_nr = character(),
+  case_link = character(),
+  case_address = character(),
+  month = character()
+  )
+
+for(i in 1:nrow(data_cases)) {
+  
+  temp <- NULL
+  
+  temp <- read_html(data_cases$case_link[i]) %>%
+    html_elements("dl , div.zeilehead") %>%
+    html_text() %>%
+    as.data.frame() %>%
+    mutate(info = sapply(str_split(., ":"), "[[", 1)) %>%
+    mutate(text = gsub("^.*?:","",.)) %>%
+    select(-.)
+  
+  type <- read_html(data_cases$case_link[i]) |>
+    html_elements("#Verfahren") |>
+    html_text() 
+
+  temp$type <- type[length(type)] 
+  temp$case_nr <- data_cases$case_nr[i]
+  temp$case_link <- data_cases$case_link[i]
+  temp$case_address <- data_cases$case_address[i]
+  temp$month <- data_cases$month[i]
+  
+  data_info <- data_info |> add_row(temp)
+  
+  if (i %% 100 == 0) {
+    print(paste0("Total: ", nrow(data_cases), ", Current: ", i))
+  }
+  
+}
+```
+
+Often time quite some data wrangling is needed to end up with the data format you wish to have:
+
+```{r}
+data_decisions <- data_info %>%
+  mutate(
+    court = sapply(str_split(case_nr, ", "), "[[", 1),
+    court = substr(court, 4, nchar(court)),
+    year = paste0(substr(month, 1 ,4), "-01-01")
+    ) %>%
+  mutate(
+    notice = ifelse(startsWith(info, "Bekannt gemacht") | startsWith(info, "In Ediktsdatei Ã¼bernommen am"), info, NA),
+    decision = ifelse(startsWith(info, "Beschluss vom"), info, NA)
+    ) %>%
+  group_by(case_nr) %>%
+  mutate(
+    decision = ifelse(row_number() == 1, notice, decision),
+    decision = na.locf(decision),
+    notice = na.locf(notice)
+    ) %>%
+  filter(startsWith(info, "Beschluss vom") == F & startsWith(info, "Bekannt gemacht") == F) %>%
+  ungroup() 
+
+data_wide <- data_decisions %>%  
+  data.table() %>%
+  .[, order:=.GRP, by=.(case_nr, decision)] %>%
+  data.table::dcast(
+    case_nr + case_link + court + order + type + month + year + notice + decision ~ info, 
+    value.var = "text", 
+    fun.aggregate = function(x) paste(x, collapse = " "), 
+    fill = NA
+    ) %>%
+  arrange(order) %>%
+  group_by(case_nr) %>%
+  mutate(
+    decision_nr = seq_along(decision) - 1,
+    decision_count = max(decision_nr),
+    notice_date = gsub("Bekannt gemacht am ", "", notice),
+    decision_date = gsub("Bekannt gemacht am ", "", decision),
+    decision_date = gsub("Beschluss vom ", "", decision_date),
+    notice_year = as.numeric(stringr::str_extract(notice_date, "\\d{4}")),
+    birth_debtor=str_extract(Schuldner,"[0-9/]{2}.[0-9/]{2}.[0-9/]{4}"),
+    birth_debtor=substr(birth_debtor,1,10),
+    birth_debtor=ifelse(grepl("/", birth_debtor) == T, NA, birth_debtor),
+    name_debtor = sapply(str_split(Schuldner, "Vorname"), "[[", 1)
+    ) %>%
+  select(- order) %>%
+  group_by(case_nr) %>%
+  mutate(
+    name_debtor = na.locf(name_debtor, na.rm = T),
+    birth_debtor = na.locf(birth_debtor, na.rm = F, fromLast = T)
+    ) %>%
+  ungroup()
+```
+
+Now we turn to RSelenium. Sometimes we find the data hidden behind some elements we can not easily extract from the DOM. Then using Selenium might be the way to proceed.
+
+```{r}
+selenium_server <- rsDriver(
+  browser = "firefox", 
+  chromever = NULL,
+  verbose = FALSE, 
+  port = 3333L
+  )
+
+client <- selenium_server$client
+```
+
+Some basic functions we can use in the browser:
+
+```{r}
+client$open()
+client$setWindowSize(600, 600)
+client$navigate("https://edikte.justiz.gv.at")
+client$refresh()
+client$closeWindow()
+```
+
+Revisiting the edikte website we see that we could have also used Selenium to make search requests:
+
+```{r}
+client$navigate(URL_base)
+
+element <- client$findElement(using = "link text", "Erweiterte Suche")
+element$getElementAttribute("href")
+element$clickElement()
+
+search_field <- client$findElement(using = "name", "SchuldnerS")
+search_field$sendKeysToElement(list("Lukas Schmoigl", key = "enter"))
+
+client$executeScript("window.scrollTo(0,document.body.scrollHeight);")
+```
+
+Here is an example of a website we would not be able to scrape with Selenium:
+
+```{r}
+client$navigate("https://www.statistik.at/atlas/")
+
+element <- client$findElement(
+  using = "css selector", 
+  ".them_icon_wrap:nth-child(5) img"
+  )
+element$clickElement()
+
+element <- client$findElement(
+  using = "css selector", 
+  ".map_link:nth-child(4) p"
+  )
+element$clickElement()
+
+search_field <- client$findElement(
+  using = "id", 
+  "filterBB"
+  )
+search_field$sendKeysToElement(list(
+  "4820", 
+  key = "enter")
+  )
+
+search_prompt <- client$findElement(
+  using = "link text", 
+  "4820"
+  )
+search_prompt$clickElement()
+
+element <- client$findElement(
+  using = "css selector", 
+  ".ol-unselectable"
+  )
+element$clickElement()
+
+hover_info <- client$findElement(
+  using = "id", 
+  "div_feature_info_title"
+  )
+hover_info$getElementText()
+```
+
+By looping through municipalities, we are able to extract all the data, if we want to:
+
+```{r}
+postcodes<- c("4820", "5300", "3900", "3180", "6993", "9900", "4810", "5020", "3040", "7540", "9400", "5550")
+data_debt <- NULL
+
+for(i in 1:length(postcodes)) {
+
+  client$navigate("https://www.statistik.at/atlas/")
+
+  element <- client$findElement(
+    using = "css selector", 
+    ".them_icon_wrap:nth-child(5) img"
+    )
+  
+  element$clickElement()
+  
+  element <- client$findElement(
+    using = "css selector", 
+    ".map_link:nth-child(4) p"
+    )
+  
+  element$clickElement()
+  
+  search_field <- client$findElement(
+    using = "id", 
+    "filterBB"
+    )
+  
+  search_field$sendKeysToElement(
+    list(
+      postcodes[i], 
+      key = "enter"
+      )
+    )
+  
+  Sys.sleep(1) # zoom takes some time
+  
+  search_prompt <- client$findElement(
+    using = "link text", 
+    postcodes[i]
+    )
+  
+  search_prompt$clickElement()
+  
+  element <- client$findElement(
+    using = "css selector", 
+    ".ol-viewport > .ol-unselectable"
+    )
+  
+  element$clickElement()
+  
+  hover_info <- client$findElement(
+    using = "id", 
+    "div_feature_info_title"
+    )
+  
+  Sys.sleep(1)
+  datum <- hover_info$getElementText()[[1]]
+  print(datum)
+  data_debt <- rbind(data_debt, datum)
+
+}
+```
