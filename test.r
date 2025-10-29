@@ -1,12 +1,111 @@
-hey test
+library(rvest)
+library(readr)
+library(RSelenium)
+library(netstat)
+library(tidyverse)
+library(lubridate)
+library(zoo)
+library(data.table)
+library(dplyr)
 
-ich teste weiter
+URL_example <- "https://de.wikipedia.org/wiki/Liste_der_Bezirke_und_Statutarst%C3%A4dte_in_%C3%96sterreich"
+
+page_example <- read_html(URL_example)
+
+example_table <- page_example |>
+  html_element("table.wikitable") |>  
+  html_table(trim = TRUE, fill = TRUE)|> 
+  rename(BKZ = 1, Bezirk = 2, KFZ = 4, Fläche = 5, Einwohner = 6, 
+         Bevölkerungsdichte = 7)
+
+example_table <- example_table[-22, ]
 
 
-dritte Testulierung
+example_table <- example_table |>
+  mutate(
+    BKZ = as.character(BKZ),
+    Bezirk = as.character(Bezirk),
+    KFZ = as.character(KFZ),
+    
+    Fläche = gsub("\\.", "", Fläche),            # Tausenderpunkte entfernen
+    Fläche = gsub(",", ".", Fläche),             # Komma zu Punkt
+    Fläche = as.numeric(Fläche),
+    
+    Einwohner = gsub("\\.", "", Einwohner),
+    Einwohner = as.numeric(Einwohner),
+    
+    Bevölkerungsdichte = gsub(",", ".", Bevölkerungsdichte),
+    Bevölkerungsdichte = as.numeric(Bevölkerungsdichte)
+  )
 
-weiterer Test
+library(rvest)
+library(readr)
+library(RSelenium)
+library(netstat)
+library(tidyverse)
+library(lubridate)
+library(zoo)
+library(data.table)
+library(dplyr)
 
-danke julia
+URL_example <- "https://de.wikipedia.org/wiki/Liste_der_Bezirke_und_Statutarst%C3%A4dte_in_%C3%96sterreich"
 
-fucking legende
+page_example <- read_html(URL_example)
+
+example_table <- page_example |>
+  html_element("table.wikitable") |>  
+  html_table(trim = TRUE, fill = TRUE)|> 
+  rename(BKZ = 1, Bezirk = 2, KFZ = 4, Fläche = 5, Einwohner = 6, 
+         Bevölkerungsdichte = 7)
+
+example_table <- example_table[-22, ]
+
+
+example_table <- example_table |>
+  mutate(
+    BKZ = as.character(BKZ),
+    Bezirk = as.character(Bezirk),
+    KFZ = as.character(KFZ),
+    
+    Fläche = gsub("\\.", "", Fläche),            # Tausenderpunkte entfernen
+    Fläche = gsub(",", ".", Fläche),             # Komma zu Punkt
+    Fläche = as.numeric(Fläche),
+    
+    Einwohner = gsub("\\.", "", Einwohner),
+    Einwohner = as.numeric(Einwohner),
+    
+    Bevölkerungsdichte = gsub(",", ".", Bevölkerungsdichte),
+    Bevölkerungsdichte = as.numeric(Bevölkerungsdichte)
+  )
+
+example_table$Anz.Gem. <- as.numeric(example_table$Anz.Gem.)
+
+top10_pop <- example_table %>%
+  arrange(desc(Einwohner)) %>%
+  slice(1:10)
+
+# Plot
+ggplot(top10_pop, aes(x = reorder(Bezirk, Einwohner), y = Einwohner)) +
+  geom_col(fill = "darkorange") +
+  coord_flip() +
+  labs(
+    title = "Die 10 bevölkerungsreichsten Städte/Bezirke Österreichs",
+    x = "Bezirk oder Statutarstadt",
+    y = "Einwohnerzahl"
+  ) +
+  theme_minimal(base_size = 13)
+
+top10_area <- example_table %>%
+  arrange(desc(Fläche)) %>%
+  slice(1:10)
+
+# Plot erstellen
+ggplot(top10_area, aes(x = reorder(Bezirk, Fläche), y = Fläche)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(
+    title = "Die 10 flächengrößten Bezirke/Städte Österreichs",
+    x = "Bezirk oder Statutarstadt",
+    y = "Fläche (km²)"
+  ) +
+  theme_minimal(base_size = 13)
