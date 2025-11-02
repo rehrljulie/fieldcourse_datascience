@@ -23,8 +23,13 @@ URL_wiki <- "https://de.wikipedia.org/wiki/Liste_der_Bezirke_und_Statutarst%C3%A
 
 page_wiki <- read_html(URL_wiki)
 
-wiki_list <- html_table(page_wiki, header = TRUE)
-wiki_staedte <- as.data.frame(wiki_staedte[[1]]) |>
+wiki_list <- html_table(page_wiki, header = TRUE, dec = ",", convert = TRUE)
+wiki_staedte <- as.data.frame(wiki_list[[1]])|>
   rename(BKZ = 1)
+wiki_staedte1 <-wiki_staedte %>% na.omit()
+
+replace_char
+
+summary(wiki_staedte)
 ```
  
